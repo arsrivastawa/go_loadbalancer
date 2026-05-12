@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const (
@@ -17,7 +19,7 @@ const (
 )
 
 type Server struct {
-	URL          string
+	URL          *url.URL
 	Alive        bool
 	mux          sync.RWMutex
 	ReverseProxy *httputil.ReverseProxy
@@ -46,7 +48,7 @@ func (s *ServerPool) AddServer(server *Server) {
 
 func (s *ServerPool) MarkBackendStatus(backendUrl *url.URL, alive bool) {
 	for _, b := range s.servers {
-		if b.URL == backendUrl.String() {
+		if b.URL.Host == backendUrl.Host {
 			b.setAlive(alive)
 			break
 		}
@@ -71,6 +73,32 @@ func (s *ServerPool) GetNextPeer() *Server {
 		}
 	}
 	return nil
+}
+
+func isServerAlive(u *url.URL) bool {
+	timeout := 2 * time.Second
+	conn, err := net.DialTimeout("tcp", u.Host, timeout)
+
+	if err != nil {
+		return false
+	}
+
+	defer conn.Close()
+	return true
+}
+
+func (s *ServerPool) HealthCheck() {
+	for _, s := range s.servers {
+		alive := isServerAlive(s.URL)
+		s.setAlive(alive)
+
+		status := "down"
+		if alive {
+			status = "up"
+		}
+
+		fmt.Printf("server:%s status:%s", s.URL, status)
+	}
 }
 
 func requestHandler(w http.ResponseWriter, req *http.Request) {
