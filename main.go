@@ -8,6 +8,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -50,6 +51,26 @@ func (s *ServerPool) MarkBackendStatus(backendUrl *url.URL, alive bool) {
 			break
 		}
 	}
+}
+
+func (s *ServerPool) NextIndex() int {
+	return int(atomic.AddUint64(&s.current, uint64(1)) % uint64(len(s.servers)))
+}
+
+func (s *ServerPool) GetNextPeer() *Server {
+	next := s.NextIndex()
+	l := len(s.servers) + next
+
+	for i := next; i < l; i++ {
+		idx := i % len(s.servers)
+		if s.servers[idx].isAlive() {
+			if idx != next {
+				atomic.StoreUint64(&s.current, uint64(idx))
+			}
+			return s.servers[idx]
+		}
+	}
+	return nil
 }
 
 func requestHandler(w http.ResponseWriter, req *http.Request) {
