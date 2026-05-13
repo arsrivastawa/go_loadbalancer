@@ -1,9 +1,7 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -101,26 +99,39 @@ func (s *ServerPool) HealthCheck() {
 	}
 }
 
-func requestHandler(w http.ResponseWriter, req *http.Request) {
-	id := req.URL.Query().Get("id")
-
-	response := map[string]string{
-		"message": "success",
-		"name":    "Aditya",
+func GetAttemptsFromContext(r *http.Request) int {
+	if attempts, ok := r.Context().Value(Attempts).(int); ok {
+		return attempts
 	}
-
-	switch req.Method {
-	case "GET":
-		json.NewEncoder(w).Encode(response)
-	case "POST":
-		json.NewEncoder(w).Encode(response)
-	default:
-		fmt.Fprintf(w, "Hello for different type of request your user id is %s", id)
-	}
+	return 1
 }
 
-func main() {
+func GetRetryFromContext(r *http.Request) int {
+	if retry, ok := r.Context().Value(Retry).(int); ok {
+		return retry
+	}
+	return 0
+}
 
-	http.HandleFunc("/hello", requestHandler)
-	log.Fatal(http.ListenAndServe(":8080", nil))
+func loadBalancer(w http.ResponseWriter, r *http.Request) {
+	attempts := GetAttemptsFromContext(r)
+
+	if attempts > 3 {
+		fmt.Printf("Max attempts reached for request, addr: %s, url: %s", r.RemoteAddr, r.URL.Path)
+		http.Error(w, "Service not available", http.StatusServiceUnavailable)
+	}
+
+	server := serverPool.GetNextPeer()
+	if server != nil {
+		server.ReverseProxy.ServeHTTP(w, r)
+		return
+	}
+
+	http.Error(w, "Service not available", http.StatusServiceUnavailable)
+}
+
+var serverPool ServerPool
+
+func main() {
+	println("Hello World from Load balancer")
 }
