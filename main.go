@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
+	"flag"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -99,6 +102,13 @@ func (s *ServerPool) HealthCheck() {
 	}
 }
 
+func HealthCheckHandler() {
+	t := time.NewTicker(2 * time.Second)
+	for range t.C {
+		serverPool.HealthCheck()
+	}
+}
+
 func GetAttemptsFromContext(r *http.Request) int {
 	if attempts, ok := r.Context().Value(Attempts).(int); ok {
 		return attempts
@@ -133,5 +143,75 @@ func loadBalancer(w http.ResponseWriter, r *http.Request) {
 var serverPool ServerPool
 
 func main() {
-	println("Hello World from Load balancer")
+	var port int
+	flag.IntVar(&port, "port", 3030, "Port on which loadbalncer will serve")
+	flag.Parse()
+
+	serverList := []string{}
+
+	serverList = append(serverList, "http://localhost:8079")
+	serverList = append(serverList, "http://localhost:8080")
+	serverList = append(serverList, "http://localhost:8081")
+
+	if len(serverList) == 0 {
+		fmt.Println("Please provide one or more servers to loadbalancer")
+	}
+
+	for _, server := range serverList {
+		serverUrl, err := url.Parse(server)
+
+		if err != nil {
+			println("Unable to parse serve URL, please provide valid URL")
+			return
+		}
+
+		proxy := httputil.NewSingleHostReverseProxy(serverUrl)
+
+		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, e error) {
+			fmt.Printf("server [%s] failed, error: %s", serverUrl.Host, e.Error())
+
+			retries := GetRetryFromContext(r)
+			if retries < 3 {
+				time.Sleep(10 * time.Millisecond)
+				ctx := context.WithValue(r.Context(), Retry, retries+1)
+				r = r.WithContext(ctx)
+				proxy.ServeHTTP(w, r)
+
+				return
+			}
+
+			serverPool.MarkBackendStatus(serverUrl, false)
+
+			attempts := GetAttemptsFromContext(r)
+
+			fmt.Println("Attempting retry for the request")
+
+			ctx := context.WithValue(r.Context(), Attempts, attempts+1)
+
+			r = r.WithContext(ctx)
+
+			loadBalancer(w, r)
+		}
+
+		serverPool.AddServer(&Server{
+			URL:          serverUrl,
+			Alive:        true,
+			ReverseProxy: proxy,
+		})
+	}
+
+	server := http.Server{
+		Addr:    fmt.Sprintf(":%d", port),
+		Handler: http.HandlerFunc(loadBalancer),
+	}
+
+	HealthCheckHandler()
+
+	fmt.Println(server.Addr)
+	fmt.Printf("Starting loadbalancer at :%d\n", port)
+
+	if err := server.ListenAndServe(); err != nil {
+		fmt.Println("failed to start loadbalancer")
+		log.Fatal(err)
+	}
 }
