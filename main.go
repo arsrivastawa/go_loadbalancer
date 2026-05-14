@@ -14,16 +14,51 @@ import (
 	"time"
 )
 
+type CircuitState int
+
+const (
+	Closed CircuitState = iota
+	Open
+	HalfOpen
+)
+
 const (
 	Attempts int = 0
 	Retry    int = 0
 )
 
 type Server struct {
-	URL          *url.URL
-	Alive        bool
-	mux          sync.RWMutex
-	ReverseProxy *httputil.ReverseProxy
+	URL             *url.URL
+	Alive           bool
+	mux             sync.RWMutex
+	ReverseProxy    *httputil.ReverseProxy
+	FailureCount    int
+	CircuitState    CircuitState
+	LastFailureTime time.Time
+}
+
+func (s *Server) setFailureCount(count int) {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	s.FailureCount = count
+}
+
+func (s *Server) getFailureCount() int {
+	s.mux.RLock()
+	defer s.mux.RUnlock()
+	return s.FailureCount
+}
+
+func (s *Server) setCircuitState(state CircuitState) {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	s.CircuitState = state
+}
+
+func (s *Server) getCircuitState() CircuitState {
+	s.mux.RLock()
+	defer s.mux.RUnlock()
+	return s.CircuitState
 }
 
 func (s *Server) isAlive() bool {
